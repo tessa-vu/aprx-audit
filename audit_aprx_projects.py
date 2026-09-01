@@ -11,6 +11,7 @@ import csv
 import glob
 import os
 import sys
+import traceback
 
 import arcpy
 
@@ -73,65 +74,94 @@ def read_connection_properties(item):
         return None
 
 
+def audit_project(aprx_path, writer):
+    try:
+        project = arcpy.mp.ArcGISProject(aprx_path)
+    except (OSError, arcpy.ExecuteError) as e:
+        print(f"    WARNING: Could not open project ({e})")
+        traceback.print_exc()
+        return 0
+
+    broken_count = 0
+    for m in project.listMaps():
+        for lyr in m.listLayers():
+            if not lyr.isBroken:
+                continue
+
+            # Broken group layers (e.g. service-backed composites) don't carry
+            # their own connection info, bur they're still worth logging
+            if lyr.isGroupLayer:
+                writer.writerow(
+                    [
+                        aprx_path,
+                        m.name,
+                        lyr.name,
+                        "Layer",
+                        "Group Layer",
+                        "",
+                        "",
+                        "Yes",
+                    ]
+                )
+                broken_count += 1
+                continue
+
+            ws, conn = extract_source_info(read_connection_properties(lyr))
+            writer.writerow(
+                [
+                    aprx_path,
+                    m.name,
+                    lyr.name,
+                    "Layer",
+                    describe_layer_type(lyr),
+                    ws,
+                    conn,
+                    "Yes",
+                ]
+            )
+            broken_count += 1
+
+        for tbl in m.listTables():
+            if not tbl.isBroken:
+                continue
+
+            ws, conn = extract_source_info(read_connection_properties(tbl))
+            writer.writerow(
+                [
+                    aprx_path,
+                    m.name,
+                    tbl.name,
+                    "Table",
+                    "Standalone Table",
+                    ws,
+                    conn,
+                    "Yes",
+                ]
+            )
+            broken_count += 1
+
+    del project
+    return broken_count
+
+
 def main():
     if len(sys.argv) != 3:
         print("Usage: python audit_aprx_projects.py <root_directory> <output_csv>")
         sys.exit(1)
 
     root_dir, output_csv = sys.argv[1], sys.argv[2]
+
     aprx_files = glob.glob(os.path.join(root_dir, "**", "*.aprx"), recursive=True)
+    print(f"Found {len(aprx_files)} project(s) in {root_dir}\n")
 
     total_broken = 0
-    with open(output_csv, "w", newline = "", encoding = "utf-8") as f:
+    with open(output_csv, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
         writer.writerow(CSV_HEADER)
 
         for aprx_path in aprx_files:
             print(f"Auditing {aprx_path}")
-            try:
-                aprx = arcpy.mp.ArcGISProject(aprx_path)
-            except (OSError, RuntimeError) as e:
-                print(f"    WARNING: Could not open ({e})")
-                continue
-
-            for m in aprx.listMaps():
-                for lyr in m.listLayers():
-                    if lyr.isGroupLayer:
-                        continue
-                    if lyr.isBroken:
-                        ws, conn = extract_source_info(read_connection_properties(lyr))
-                        writer.writerow(
-                            [
-                                aprx_path,
-                                m.name,
-                                lyr.name,
-                                "Layer",
-                                describe_layer_type(lyr),
-                                ws,
-                                conn,
-                                "Yes",
-                            ]
-                        )
-                        total_broken += 1
-
-                for tbl in m.listTables():
-                    if tbl.isBroken:
-                        ws, conn = extract_source_info(read_connection_properties(tbl))
-                        writer.writerow(
-                            [
-                                aprx_path,
-                                m.name,
-                                tbl.name,
-                                "Table",
-                                "Standalone Table",
-                                ws,
-                                conn,
-                                "Yes",
-                            ]
-                        )
-                        total_broken += 1
-
-        del aprx
+            total_broken += audit_project(aprx_path, writer)
 
     print(
         f"\nScanned {len(aprx_files)} project(s). Found {total_broken} broken source(s)."

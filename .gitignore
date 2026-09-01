@@ -3,6 +3,7 @@
 *.csv
 *.gdb
 *.lock
+*.ppkx
 
 # Folders
 data/

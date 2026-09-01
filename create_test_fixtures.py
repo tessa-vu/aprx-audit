@@ -127,6 +127,16 @@ Done. Source data created and layers added.
 
 Exit this Python session to release file locks, then break data links:
     python _break_data_links.py {root}
+
+---
+
+Web service layers must be added manually in ArcGIS Pro:
+    Map Tab > Add Data > Data From Path
+    Example WMS: https://nowcoast.noaa.gov/geoserver/observations/weather_radar/wms?SERVICE=WMS&REQUEST=GetCapabilities
+    Example REST: https://services.arcgis.com/P3ePLMYs2RVChkJx/ArcGIS/rest/services/ACS_Children_in_Immigrant_Families_Boundaries/FeatureServer/2
+
+To simulate a broken web service unzip the .aprx, corrupt the URL in
+maps/<map>.json, re-zip with .aprx extension.
     """)
 
 
