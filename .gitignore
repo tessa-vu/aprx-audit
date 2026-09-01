@@ -11,3 +11,4 @@ data/
 # Caches / Temporary
 __pycache__/
 _lyrx_temp/
+.ruff_cache/

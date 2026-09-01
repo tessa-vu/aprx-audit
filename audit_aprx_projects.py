@@ -11,6 +11,7 @@ import csv
 import glob
 import os
 import sys
+
 import arcpy
 
 CSV_HEADER = [
@@ -21,7 +22,7 @@ CSV_HEADER = [
     "Layer Type",
     "Workspace Type",
     "Connection String",
-    "Is Broken"
+    "Is Broken",
 ]
 
 LAYER_TYPE_FLAGS = [
@@ -30,8 +31,9 @@ LAYER_TYPE_FLAGS = [
     ("isRasterLayer", "Raster Layer"),
     ("isSceneLayer", "Scene Layer"),
     ("isServiceLayer", "Service Layer"),
-    ("isWebLayer", "Web Layer")
+    ("isWebLayer", "Web Layer"),
 ]
+
 
 def describe_layer_type(lyr):
     for attr, label in LAYER_TYPE_FLAGS:
@@ -39,13 +41,45 @@ def describe_layer_type(lyr):
             return label
     return "Other"
 
+
+def extract_source_info(properties):
+    if not properties:
+        return "Unknown", "Unable to Retrieve"
+
+    workspace_type = properties.get("workspace_factory", "Unknown")
+    connection_info = properties.get("connection_info") or {}
+    dataset = properties.get("dataset", "")
+
+    if "url" in connection_info:
+        return workspace_type, connection_info["url"]
+
+    if workspace_type == "SDE":
+        keys = ("server", "instance", "database", "version")
+        parts = [f"{k} = {connection_info[k]}" for k in keys if k in connection_info]
+        if dataset:
+            parts.append(f"dataset = {dataset}")
+        return workspace_type, "; ".join(parts) if parts else "Unable to Retrieve"
+
+    database = connection_info.get("database", "")
+    if database and dataset:
+        return workspace_type, os.path.join(database, dataset)
+    return workspace_type, database or "Unable to Retrieve"
+
+
+def read_connection_properties(item):
+    try:
+        return item.connectionProperties
+    except AttributeError:
+        return None
+
+
 def main():
     if len(sys.argv) != 3:
         print("Usage: python audit_aprx_projects.py <root_directory> <output_csv>")
         sys.exit(1)
 
     root_dir, output_csv = sys.argv[1], sys.argv[2]
-    aprx_files = glob.glob(os.path.join(root_dir, "**", "*.aprx"), recursive = True)
+    aprx_files = glob.glob(os.path.join(root_dir, "**", "*.aprx"), recursive=True)
 
     total_broken = 0
     with open(output_csv, "w", newline = "", encoding = "utf-8") as f:
@@ -65,20 +99,45 @@ def main():
                     if lyr.isGroupLayer:
                         continue
                     if lyr.isBroken:
-                        writer.writerow([aprx_path, m.name, lyr.name, "Layer",
-                                         describe_layer_type(lyr), "", "", "Yes"])
+                        ws, conn = extract_source_info(read_connection_properties(lyr))
+                        writer.writerow(
+                            [
+                                aprx_path,
+                                m.name,
+                                lyr.name,
+                                "Layer",
+                                describe_layer_type(lyr),
+                                ws,
+                                conn,
+                                "Yes",
+                            ]
+                        )
                         total_broken += 1
 
                 for tbl in m.listTables():
                     if tbl.isBroken:
-                        writer.writerow([aprx_path, m.name, tbl.name, "Table",
-                                         "Standalone Table", "", "","Yes"])
+                        ws, conn = extract_source_info(read_connection_properties(tbl))
+                        writer.writerow(
+                            [
+                                aprx_path,
+                                m.name,
+                                tbl.name,
+                                "Table",
+                                "Standalone Table",
+                                ws,
+                                conn,
+                                "Yes",
+                            ]
+                        )
                         total_broken += 1
 
         del aprx
 
-    print(f"\nScanned {len(aprx_files)} project(s). Found {total_broken} broken source(s).")
+    print(
+        f"\nScanned {len(aprx_files)} project(s). Found {total_broken} broken source(s)."
+    )
     print(f"Report: {output_csv}")
+
 
 if __name__ == "__main__":
     main()
