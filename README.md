@@ -17,6 +17,19 @@ Command:
 python audit_aprx_projects.py <root_directory> <output_csv>
 ```
 
+CSV has one row per broken layer or table:
+
+| Column            | Example                                     |
+|-------------------|---------------------------------------------|
+| Project Path      | `Projects/mixed_sources/mixed_sources.aprx` |
+| Map Name          | `Map`                                       |
+| Layer/Table Name  | `zoning`                                    |
+| Type              | `Layer`                                     |
+| Layer Type        | `Feature Layer`                             |
+| Workspace Type    | `FileGDB`                                   |
+| Connection String | `data/breakable_sources.gdb/zoning`         |
+| Is Broken         | `Yes`                                       |
+
 ## Tests
 Populate blank `.aprx` projects with known-state data sources:
 
@@ -26,7 +39,8 @@ python create_test_fixtures.py <root_directory>
 python break_data_links.py <root_directory>
 ```
 
-**Projects must be created manually in ArcGIS Pro first.**
+**Projects must be created manually in ArcGIS Pro first, `arcpy` has no**
+**project creation function before 3.7.**
 
 **Repo comes with base `.aprx` files in Projects/ folder.**
 
