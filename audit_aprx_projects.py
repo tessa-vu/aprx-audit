@@ -4,7 +4,9 @@ Scan a directory tree for .aprx files and report broken data sources to CSV.
 Usage:
     python audit_aprx_projects.py <root_directory> <output_csv>
 
-Only broken layers and tables are written. Projects that fail to open are logged and skipped.
+Only broken layers and tables are written. Web-backed feature layers show as
+"Feature Layer (Web)" etc. Joined layers report both sides. Projects that
+fail to open are logged and skipped.
 """
 
 import csv
@@ -26,6 +28,8 @@ CSV_HEADER = [
     "Is Broken",
 ]
 
+# isWebLayer is handled separately to produce compound labels like
+# "Feature Layer (Web)" so it's not in this list
 LAYER_TYPE_FLAGS = [
     ("isBasemapLayer", "Basemap Layer"),
     ("isFeatureLayer", "Feature Layer"),
@@ -37,15 +41,23 @@ LAYER_TYPE_FLAGS = [
 
 
 def describe_layer_type(lyr):
+    is_web = getattr(lyr, "isWebLayer", False)
     for attr, label in LAYER_TYPE_FLAGS:
         if getattr(lyr, attr, False):
-            return label
-    return "Other"
+            return f"{label} (Web)" if is_web else label
+    return "Web Layer" if is_web else "Other"
 
 
 def extract_source_info(properties):
+    # Handles flat dicts (file/SDE/web) and nested shape that
+    # joined or related layers produce (source + destination keys)
     if not properties:
         return "Unknown", "Unable to Retrieve"
+
+    if "source" in properties and "destination" in properties:
+        src_ws, src_conn = extract_source_info(properties["source"])
+        _, dst_conn = extract_source_info(properties["destination"])
+        return src_ws, f"{src_conn} ---joined to--> {dst_conn}"
 
     workspace_type = properties.get("workspace_factory", "Unknown")
     connection_info = properties.get("connection_info") or {}
