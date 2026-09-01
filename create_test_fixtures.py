@@ -18,8 +18,9 @@ Usage:
 import os
 import shutil
 import sys
-import time
+
 import arcpy
+
 
 def make_gdb(parent, name):
     path = os.path.join(parent, name)
@@ -27,23 +28,29 @@ def make_gdb(parent, name):
         arcpy.management.CreateFileGDB(parent, name)
     return path
 
-def make_feature_class(gdb, name, geometry = "POINT"):
+
+def make_feature_class(gdb, name, geometry="POINT"):
     fc = os.path.join(gdb, name)
     if not arcpy.Exists(fc):
-        arcpy.management.CreateFeatureclass(gdb, name, geometry, spatial_reference = 4326)
+        arcpy.management.CreateFeatureclass(gdb, name, geometry, spatial_reference=4326)
     return fc
 
-def make_shapefile(folder, name, geometry = "POLYGON"):
+
+def make_shapefile(folder, name, geometry="POLYGON"):
     out = os.path.join(folder, name + ".shp")
     if not arcpy.Exists(out):
-        arcpy.management.CreateFeatureclass(folder, name, geometry, spatial_reference = 4326)
+        arcpy.management.CreateFeatureclass(
+            folder, name, geometry, spatial_reference=4326
+        )
     return out
+
 
 def make_lyrx(source, lyrx_path):
     tmp = f"_tmp_{os.path.splitext(os.path.basename(lyrx_path))[0]}"
     arcpy.management.MakeFeatureLayer(source, tmp)
     arcpy.management.SaveToLayerFile(tmp, lyrx_path)
     arcpy.management.Delete(tmp)
+
 
 def add_layers(aprx_path, lyrx_paths):
     aprx = arcpy.mp.ArcGISProject(aprx_path)
@@ -52,6 +59,7 @@ def add_layers(aprx_path, lyrx_paths):
         m.addLayer(arcpy.mp.LayerFile(lyrx))
     aprx.save()
     del aprx
+
 
 def main():
     if len(sys.argv) != 2:
@@ -67,7 +75,7 @@ def main():
     expected = {
         "all_valid": os.path.join(proj_dir, "all_valid", "all_valid.aprx"),
         "mixed": os.path.join(proj_dir, "mixed_sources", "mixed_sources.aprx"),
-        "all_broken": os.path.join(proj_dir, "all_broken", "all_broken.aprx")
+        "all_broken": os.path.join(proj_dir, "all_broken", "all_broken.aprx"),
     }
 
     missing = [n for n, p in expected.items() if not os.path.exists(p)]
@@ -79,16 +87,16 @@ def main():
         sys.exit(1)
 
     for d in (data_dir, shp_dir, lyrx_dir):
-        os.makedirs(d, exist_ok = True)
+        os.makedirs(d, exist_ok=True)
 
     print("Creating source data...")
     gdb_valid = make_gdb(data_dir, "valid_sources.gdb")
     gdb_breakable = make_gdb(data_dir, "breakable_sources.gdb")
 
-    fc_parcels = make_feature_class(gdb_valid, "parcels", geometry = "POLYGON")
-    fc_streets = make_feature_class(gdb_valid, "streets", geometry = "POLYLINE")
-    fc_zoning = make_feature_class(gdb_breakable, "zoning", geometry = "POLYGON")
-    fc_flood = make_feature_class(gdb_breakable, "flood_zones", geometry = "POLYGON")
+    fc_parcels = make_feature_class(gdb_valid, "parcels", geometry="POLYGON")
+    fc_streets = make_feature_class(gdb_valid, "streets", geometry="POLYLINE")
+    fc_zoning = make_feature_class(gdb_breakable, "zoning", geometry="POLYGON")
+    fc_flood = make_feature_class(gdb_breakable, "flood_zones", geometry="POLYGON")
     shp_parks = make_shapefile(shp_dir, "parks")
     shp_wetlands = make_shapefile(shp_dir, "wetlands")
 
@@ -119,7 +127,18 @@ Done. Source data created and layers added.
 
 Exit this Python session to release file locks, then break data links:
     python _break_data_links.py {root}
+
+---
+
+Web service layers must be added manually in ArcGIS Pro:
+    Map Tab > Add Data > Data From Path
+    Example WMS: https://nowcoast.noaa.gov/geoserver/observations/weather_radar/wms?SERVICE=WMS&REQUEST=GetCapabilities
+    Example REST: https://services.arcgis.com/P3ePLMYs2RVChkJx/ArcGIS/rest/services/ACS_Children_in_Immigrant_Families_Boundaries/FeatureServer/2
+
+To simulate a broken web service unzip the .aprx, corrupt the URL in
+maps/<map>.json, re-zip with .aprx extension.
     """)
+
 
 if __name__ == "__main__":
     main()
