@@ -13,6 +13,7 @@ import csv
 import glob
 import os
 import sys
+import time
 import traceback
 
 import arcpy
@@ -84,6 +85,28 @@ def read_connection_properties(item):
         return item.connectionProperties
     except AttributeError:
         return None
+
+
+def format_file_size(path):
+    size = os.path.getsize(path)
+
+    for unit in ("KB", "MB", "GB"):
+        size /= 1024
+        if size < 1024 or unit == "GB":
+            return f"{size:.0f} {unit}"
+
+    return f"{size:.0f} GB"
+
+
+def format_elapsed_time(seconds):
+    if seconds < 1:
+        return f"{round(seconds * 1000)} ms"
+
+    if seconds < 60:
+        return f"{seconds:.2f} sec"
+
+    minutes = seconds / 60
+    return f"{minutes:.2f} min"
 
 
 def audit_project(aprx_path, writer):
@@ -172,8 +195,16 @@ def main():
         writer.writerow(CSV_HEADER)
 
         for aprx_path in aprx_files:
-            print(f"Auditing {aprx_path}")
-            total_broken += audit_project(aprx_path, writer)
+            start_time = time.perf_counter()
+            broken_count = audit_project(aprx_path, writer)
+            elapsed_time = time.perf_counter() - start_time
+
+            total_broken += broken_count
+            print(
+                f"Auditing {aprx_path} | "
+                f"{format_file_size(aprx_path)} | "
+                f"{format_elapsed_time(elapsed_time)}"
+            )
 
     print(
         f"\nScanned {len(aprx_files)} project(s). Found {total_broken} broken source(s)."
