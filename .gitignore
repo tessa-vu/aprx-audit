@@ -1,0 +1,13 @@
+# File Types
+*.aprx
+*.csv
+*.gdb
+*.lock
+
+# Folders
+data/
+.vscode/
+
+# Caches / Temporary
+__pycache__/
+_lyrx_temp/
