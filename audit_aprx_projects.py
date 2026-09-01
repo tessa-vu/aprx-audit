@@ -4,7 +4,9 @@ Scan a directory tree for .aprx files and report broken data sources to CSV.
 Usage:
     python audit_aprx_projects.py <root_directory> <output_csv>
 
-Only broken layers and tables are written. Projects that fail to open are logged and skipped.
+Only broken layers and tables are written. Web-backed feature layers show as
+"Feature Layer (Web)" etc. Joined layers report both sides. Projects that
+fail to open are logged and skipped.
 """
 
 import csv
@@ -47,8 +49,15 @@ def describe_layer_type(lyr):
 
 
 def extract_source_info(properties):
+    # Handles flat dicts (file/SDE/web) and nested shape that
+    # joined or related layers produce (source + destination keys)
     if not properties:
         return "Unknown", "Unable to Retrieve"
+
+    if "source" in properties and "destination" in properties:
+        src_ws, src_conn = extract_source_info(properties["source"])
+        _, dst_conn = extract_source_info(properties["destination"])
+        return src_ws, f"{src_conn} ---joined to--> {dst_conn}"
 
     workspace_type = properties.get("workspace_factory", "Unknown")
     connection_info = properties.get("connection_info") or {}

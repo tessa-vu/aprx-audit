@@ -4,10 +4,19 @@
 *.gdb
 *.lock
 *.ppkx
+*.mpkx
+*.xml
 
 # Folders
 data/
 .vscode/
+Projects/.backups/
+Projects/Gap_Index_Map_1_for_Rural_Vet_Analysis/
+Projects/Napa_Daymet/
+Projects/New_World_Screwworm/
+Projects/tripple_crown_parcels/
+Projects/RasterFunctionTemplates/
+Projects/Index/
 
 # Caches / Temporary
 __pycache__/
