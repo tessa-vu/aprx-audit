@@ -26,6 +26,8 @@ CSV_HEADER = [
     "Is Broken",
 ]
 
+# isWebLayer is handled separately to produce compound labels like
+# "Feature Layer (Web)" so it's not in this list
 LAYER_TYPE_FLAGS = [
     ("isBasemapLayer", "Basemap Layer"),
     ("isFeatureLayer", "Feature Layer"),
@@ -37,10 +39,11 @@ LAYER_TYPE_FLAGS = [
 
 
 def describe_layer_type(lyr):
+    is_web = getattr(lyr, "isWebLayer", False)
     for attr, label in LAYER_TYPE_FLAGS:
         if getattr(lyr, attr, False):
-            return label
-    return "Other"
+            return f"{label} (Web)" if is_web else label
+    return "Web Layer" if is_web else "Other"
 
 
 def extract_source_info(properties):
