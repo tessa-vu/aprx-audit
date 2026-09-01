@@ -8,7 +8,7 @@ creation function before Pro 3.7. Expected layout:
     Projects/mixed_sources/mixed_sources.aprx
     Projects/all_broken/all_broken.aprx
 
-After running this script, exist Python to release file locks, then run
+After running this script, exit Python to release file locks, then run
 break_data_links.py to relocate the breakable sources.
 
 Usage:
