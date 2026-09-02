@@ -22,6 +22,12 @@ from datetime import datetime, timezone
 import arcpy
 
 CSV_HEADER = [
+    "Run Timestamp UTC",
+    "Hostname",
+    "OS User",
+    "ArcGIS Pro Version",
+    "Portal URL",
+    "Portal User",
     "Project Path",
     "Map Name",
     "Layer/Table Name",
@@ -140,7 +146,19 @@ def get_run_context():
     ]
 
 
-def audit_project(aprx_path, writer):
+def sanitize_csv_cell(value):
+    if isinstance(value, str) and value.startswith(("=", "+", "-", "@", "\t", "\r")):
+        return f"'{value}"
+    return value
+
+
+def write_csv_row(writer, run_context, item_fields):
+    writer.writerow(
+        [sanitize_csv_cell(value) for value in [*run_context, *item_fields]]
+    )
+
+
+def audit_project(aprx_path, writer, run_context):
     try:
         project = arcpy.mp.ArcGISProject(aprx_path)
     except (OSError, arcpy.ExecuteError) as e:
@@ -155,9 +173,11 @@ def audit_project(aprx_path, writer):
                 continue
 
             # Broken group layers (e.g. service-backed composites) don't carry
-            # their own connection info, bur they're still worth logging
+            # their own connection info, but they're still worth logging
             if lyr.isGroupLayer:
-                writer.writerow(
+                write_csv_row(
+                    writer,
+                    run_context,
                     [
                         aprx_path,
                         m.name,
@@ -167,13 +187,15 @@ def audit_project(aprx_path, writer):
                         "",
                         "",
                         "Yes",
-                    ]
+                    ],
                 )
                 broken_count += 1
                 continue
 
             ws, conn = extract_source_info(read_connection_properties(lyr))
-            writer.writerow(
+            write_csv_row(
+                writer,
+                run_context,
                 [
                     aprx_path,
                     m.name,
@@ -183,7 +205,7 @@ def audit_project(aprx_path, writer):
                     ws,
                     conn,
                     "Yes",
-                ]
+                ],
             )
             broken_count += 1
 
@@ -192,7 +214,9 @@ def audit_project(aprx_path, writer):
                 continue
 
             ws, conn = extract_source_info(read_connection_properties(tbl))
-            writer.writerow(
+            write_csv_row(
+                writer,
+                run_context,
                 [
                     aprx_path,
                     m.name,
@@ -202,7 +226,7 @@ def audit_project(aprx_path, writer):
                     ws,
                     conn,
                     "Yes",
-                ]
+                ],
             )
             broken_count += 1
 
@@ -216,18 +240,19 @@ def main():
         sys.exit(1)
 
     root_dir, output_csv = sys.argv[1], sys.argv[2]
+    run_context = get_run_context()
 
     aprx_files = glob.glob(os.path.join(root_dir, "**", "*.aprx"), recursive=True)
     print(f"Found {len(aprx_files)} project(s) in {root_dir}\n")
 
     total_broken = 0
-    with open(output_csv, "w", newline="", encoding="utf-8") as f:
+    with open(output_csv, "w", newline="", encoding="utf-8-sig") as f:
         writer = csv.writer(f)
         writer.writerow(CSV_HEADER)
 
         for aprx_path in aprx_files:
             start_time = time.perf_counter()
-            broken_count = audit_project(aprx_path, writer)
+            broken_count = audit_project(aprx_path, writer, run_context)
             elapsed_time = time.perf_counter() - start_time
 
             total_broken += broken_count
