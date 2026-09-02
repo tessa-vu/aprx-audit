@@ -15,10 +15,15 @@ import os
 import sys
 import time
 import traceback
+from datetime import datetime, timezone
 
 import arcpy
 
 CSV_HEADER = [
+    "Run Timestamp UTC",
+    "ArcGIS Pro Version",
+    "Portal URL",
+    "Portal User",
     "Project Path",
     "Map Name",
     "Layer/Table Name",
@@ -26,7 +31,7 @@ CSV_HEADER = [
     "Layer Type",
     "Workspace Type",
     "Connection String",
-    "Is Broken",
+    "Status",
 ]
 
 # isWebLayer is handled separately to produce compound labels like
@@ -112,74 +117,266 @@ def format_elapsed_time(seconds):
     return f"{minutes:.2f} min"
 
 
-def audit_project(aprx_path, writer):
+def get_run_context():
+    def value_or_unknown(getter):
+        try:
+            value = getter()
+        except Exception:
+            return "Unknown"
+        return value if value else "Unknown"
+
+    portal_url = value_or_unknown(arcpy.GetActivePortalURL)
+
+    def get_portal_user():
+        portal = arcpy.GetPortalDescription()
+        user = portal.get("user") or {}
+        return user.get("username")
+
+    return [
+        datetime.datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        value_or_unknown(lambda: arcpy.GetInstallInfo()["Version"]),
+        portal_url,
+        value_or_unknown(get_portal_user),
+    ]
+
+
+def sanitize_csv_cell(value):
+    if isinstance(value, str) and value.startswith(("=", "+", "-", "@", "\t", "\r")):
+        return f"'{value}"
+    return value
+
+
+def write_csv_row(writer, run_context, item_fields):
+    writer.writerow(
+        [sanitize_csv_cell(value) for value in [*run_context, *item_fields]]
+    )
+
+
+def audit_project(aprx_path, writer, run_context):
     try:
         project = arcpy.mp.ArcGISProject(aprx_path)
-    except (OSError, arcpy.ExecuteError) as e:
+    except (OSError, RuntimeError, arcpy.ExecuteError) as e:
         print(f"    WARNING: Could not open project ({e})")
+        write_csv_row(
+            writer,
+            run_context,
+            [
+                aprx_path,
+                "Unknown",
+                "Unknown",
+                "Project",
+                "Unknown",
+                "",
+                str(e),
+                "Project Open Failed",
+            ],
+        )
         traceback.print_exc()
-        return 0
+        return None
 
     broken_count = 0
-    for m in project.listMaps():
-        for lyr in m.listLayers():
-            if not lyr.isBroken:
-                continue
+    try:
+        try:
+            maps = project.listMaps()
+        except (OSError, RuntimeError, arcpy.ExecuteError) as e:
+            print(f"    WARNING: Could not list maps ({e})")
+            write_csv_row(
+                writer,
+                run_context,
+                [
+                    aprx_path,
+                    "Unknown",
+                    "Unknown",
+                    "Layer",
+                    "Unknown",
+                    "",
+                    str(e),
+                    "Layer Read Failed",
+                ],
+            )
+            return broken_count
 
-            # Broken group layers (e.g. service-backed composites) don't carry
-            # their own connection info, bur they're still worth logging
-            if lyr.isGroupLayer:
-                writer.writerow(
+        for m in maps:
+            try:
+                map_name = m.name
+                layers = m.listLayers()
+            except (OSError, RuntimeError, arcpy.ExecuteError) as e:
+                print(f"    WARNING: Could not read map ({e})")
+                write_csv_row(
+                    writer,
+                    run_context,
                     [
                         aprx_path,
-                        m.name,
-                        lyr.name,
+                        getattr(m, "name", "Unknown"),
+                        "Unknown",
                         "Layer",
-                        "Group Layer",
+                        "Unknown",
                         "",
-                        "",
-                        "Yes",
-                    ]
+                        str(e),
+                        "Layer Read Failed",
+                    ],
                 )
-                broken_count += 1
                 continue
 
-            ws, conn = extract_source_info(read_connection_properties(lyr))
-            writer.writerow(
-                [
-                    aprx_path,
-                    m.name,
-                    lyr.name,
-                    "Layer",
-                    describe_layer_type(lyr),
-                    ws,
-                    conn,
-                    "Yes",
-                ]
-            )
-            broken_count += 1
+            for lyr in layers:
+                try:
+                    is_broken = lyr.isBroken
+                    layer_name = lyr.name
+                except (OSError, RuntimeError, arcpy.ExecuteError) as e:
+                    print(f"    WARNING: Could not read layer ({e})")
+                    write_csv_row(
+                        writer,
+                        run_context,
+                        [
+                            aprx_path,
+                            map_name,
+                            "Unknown",
+                            "Layer",
+                            "Unknown",
+                            "",
+                            str(e),
+                            "Layer Read Failed",
+                        ],
+                    )
+                    continue
 
-        for tbl in m.listTables():
-            if not tbl.isBroken:
+                if not is_broken:
+                    continue
+
+                try:
+                    if lyr.isGroupLayer:
+                        write_csv_row(
+                            writer,
+                            run_context,
+                            [
+                                aprx_path,
+                                map_name,
+                                layer_name,
+                                "Layer",
+                                "Group Layer",
+                                "",
+                                "",
+                                "Broken",
+                            ],
+                        )
+                        broken_count += 1
+                        continue
+
+                    ws, conn = extract_source_info(read_connection_properties(lyr))
+                    write_csv_row(
+                        writer,
+                        run_context,
+                        [
+                            aprx_path,
+                            map_name,
+                            layer_name,
+                            "Layer",
+                            describe_layer_type(lyr),
+                            ws,
+                            conn,
+                            "Broken",
+                        ],
+                    )
+                    broken_count += 1
+                except (OSError, RuntimeError, arcpy.ExecuteError) as e:
+                    print(f"    WARNING: Could not read layer ({e})")
+                    write_csv_row(
+                        writer,
+                        run_context,
+                        [
+                            aprx_path,
+                            map_name,
+                            layer_name,
+                            "Layer",
+                            "Unknown",
+                            "",
+                            str(e),
+                            "Layer Read Failed",
+                        ],
+                    )
+
+            try:
+                tables = m.listTables()
+            except (OSError, RuntimeError, arcpy.ExecuteError) as e:
+                print(f"    WARNING: Could not list tables in map {map_name} ({e})")
+                write_csv_row(
+                    writer,
+                    run_context,
+                    [
+                        aprx_path,
+                        map_name,
+                        "Unknown",
+                        "Table",
+                        "Standalone Table",
+                        "",
+                        str(e),
+                        "Layer Read Failed",
+                    ],
+                )
                 continue
 
-            ws, conn = extract_source_info(read_connection_properties(tbl))
-            writer.writerow(
-                [
-                    aprx_path,
-                    m.name,
-                    tbl.name,
-                    "Table",
-                    "Standalone Table",
-                    ws,
-                    conn,
-                    "Yes",
-                ]
-            )
-            broken_count += 1
+            for tbl in tables:
+                try:
+                    is_broken = tbl.isBroken
+                    table_name = tbl.name
+                except (OSError, RuntimeError, arcpy.ExecuteError) as e:
+                    print(f"    WARNING: Could not read table ({e})")
+                    write_csv_row(
+                        writer,
+                        run_context,
+                        [
+                            aprx_path,
+                            map_name,
+                            "Unknown",
+                            "Table",
+                            "Standalone Table",
+                            "",
+                            str(e),
+                            "Layer Read Failed",
+                        ],
+                    )
+                    continue
 
-    del project
-    return broken_count
+                if not is_broken:
+                    continue
+
+                try:
+                    ws, conn = extract_source_info(read_connection_properties(tbl))
+                    write_csv_row(
+                        writer,
+                        run_context,
+                        [
+                            aprx_path,
+                            map_name,
+                            table_name,
+                            "Table",
+                            "Standalone Table",
+                            ws,
+                            conn,
+                            "Broken",
+                        ],
+                    )
+                    broken_count += 1
+                except (OSError, RuntimeError, arcpy.ExecuteError) as e:
+                    print(f"    WARNING: Could not read table ({e})")
+                    write_csv_row(
+                        writer,
+                        run_context,
+                        [
+                            aprx_path,
+                            map_name,
+                            table_name,
+                            "Table",
+                            "Standalone Table",
+                            "",
+                            str(e),
+                            "Layer Read Failed",
+                        ],
+                    )
+
+        return broken_count
+    finally:
+        del project
 
 
 def main():
@@ -187,32 +384,65 @@ def main():
         print("Usage: python audit_aprx_projects.py <root_directory> <output_csv>")
         sys.exit(1)
 
+    class ProjectErrorTrackingWriter:
+        def __init__(self, csv_writer):
+            self.csv_writer = csv_writer
+            self.had_read_error = False
+
+        def writerow(self, row):
+            if row[-1] == "Layer Read Failed":
+                self.had_read_error = True
+            self.csv_writer.writerow(row)
+
     root_dir, output_csv = sys.argv[1], sys.argv[2]
+    run_context = get_run_context()
 
     aprx_files = glob.glob(os.path.join(root_dir, "**", "*.aprx"), recursive=True)
     print(f"Found {len(aprx_files)} project(s) in {root_dir}\n")
 
     total_broken = 0
-    with open(output_csv, "w", newline="", encoding="utf-8") as f:
-        writer = csv.writer(f)
-        writer.writerow(CSV_HEADER)
+    failed_to_open = 0
+    projects_with_read_errors = 0
+
+    with open(output_csv, "w", newline="", encoding="utf-8-sig") as f:
+        csv_writer = csv.writer(f)
+        csv_writer.writerow(CSV_HEADER)
 
         for aprx_path in aprx_files:
-            start_time = time.perf_counter()
-            broken_count = audit_project(aprx_path, writer)
-            elapsed_time = time.perf_counter() - start_time
+            print(f"Auditing {aprx_path}", flush=True)
 
-            total_broken += broken_count
+            writer = ProjectErrorTrackingWriter(csv_writer)
+            start_time = time.perf_counter()
+            broken_count = audit_project(aprx_path, writer, run_context)
+            elapsed_time = time.perf_counter() - start_time
+            f.flush()
+
+            if broken_count is None:
+                failed_to_open += 1
+            else:
+                total_broken += broken_count
+
+            if writer.had_read_error:
+                projects_with_read_errors += 1
+
             print(
-                f"Auditing {aprx_path} | "
-                f"{format_file_size(aprx_path)} | "
+                f"    {format_file_size(aprx_path)} | "
                 f"{format_elapsed_time(elapsed_time)}"
             )
+
+    failed_projects = failed_to_open + projects_with_read_errors
 
     print(
         f"\nScanned {len(aprx_files)} project(s). Found {total_broken} broken source(s)."
     )
+    print(
+        f"Projects with Errors: {failed_projects} "
+        f"({failed_to_open} open failed, "
+        f"{projects_with_read_errors} read errors)"
+    )
     print(f"Report: {output_csv}")
+
+    sys.exit(1 if failed_projects else 0)
 
 
 if __name__ == "__main__":
