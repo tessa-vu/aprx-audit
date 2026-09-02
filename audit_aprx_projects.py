@@ -44,6 +44,8 @@ LAYER_TYPE_FLAGS = [
 def describe_layer_type(lyr):
     is_web = getattr(lyr, "isWebLayer", False)
     for attr, label in LAYER_TYPE_FLAGS:
+        if attr == "isWebLayer":
+            continue
         if getattr(lyr, attr, False):
             return f"{label} (Web)" if is_web else label
     return "Web Layer" if is_web else "Other"
@@ -77,7 +79,7 @@ def extract_source_info(properties):
     database = connection_info.get("database", "")
     if database and dataset:
         return workspace_type, os.path.join(database, dataset)
-    return workspace_type, database or "Unable to Retrieve"
+    return workspace_type, database or dataset or "Unable to Retrieve"
 
 
 def read_connection_properties(item):
@@ -90,12 +92,13 @@ def read_connection_properties(item):
 def format_file_size(path):
     size = os.path.getsize(path)
 
+    if size < 1024:
+        return f"{size} bytes"
+
     for unit in ("KB", "MB", "GB"):
         size /= 1024
         if size < 1024 or unit == "GB":
             return f"{size:.0f} {unit}"
-
-    return f"{size:.0f} GB"
 
 
 def format_elapsed_time(seconds):
