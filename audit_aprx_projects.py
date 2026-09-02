@@ -10,11 +10,14 @@ fail to open are logged and skipped.
 """
 
 import csv
+import getpass
 import glob
 import os
+import socket
 import sys
 import time
 import traceback
+from datetime import datetime, timezone
 
 import arcpy
 
@@ -110,6 +113,31 @@ def format_elapsed_time(seconds):
 
     minutes = seconds / 60
     return f"{minutes:.2f} min"
+
+
+def get_run_context():
+    def value_or_unknown(getter):
+        try:
+            value = getter()
+        except Exception:
+            return "Unknown"
+        return value if value else "Unknown"
+
+    portal_url = value_or_unknown(arcpy.GetActivePortalURL)
+
+    def get_portal_user():
+        portal = arcpy.GetPortalDescription()
+        user = portal.get("user") or {}
+        return user.get("username")
+
+    return [
+        datetime.datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        value_or_unknown(socket.gethostname),
+        value_or_unknown(getpass.getuser),
+        value_or_unknown(lambda: arcpy.GetInstallInfo()["Version"]),
+        portal_url,
+        value_or_unknown(get_portal_user),
+    ]
 
 
 def audit_project(aprx_path, writer):
