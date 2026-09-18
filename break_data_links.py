@@ -1,6 +1,11 @@
 """
 Relocate breakable data sources to simulate broken links in .aprx projects.
 
+The projects keep pointing at the old paths, so moving the data is enough to
+reproduce exactly what happens in the real world when someone reorganizes a
+network drive. Nothing is deleted, the data is moved into data/_moved_to_break
+and can be moved back.
+
 Run this in a separate Python session after create_test_fixtures.py, arcpy
 holds schema locks on geodatabases and shapefiles until the process exits.
 
@@ -29,6 +34,8 @@ def main():
         os.path.join(shp_dir, "wetlands.shp"),
     ]
 
+    # A partially populated break folder means a prior run already moved some
+    # of these, so the "expected broken counts" below can no longer be trusted.
     if os.path.exists(broken_dir) and os.listdir(broken_dir):
         print(f"WARNING: {broken_dir} already has files (previous run?)")
         print("     Clear it before re-running for a clean state.\n")
@@ -46,6 +53,8 @@ def main():
         shutil.move(src, dst)
 
         if src.endswith(".shp"):
+            # Moving only the .shp would leave a half-valid dataset, the
+            # sidecar files have to go with it.
             base = os.path.splitext(src)[0]
             for ext in (".dbf", ".prj", ".shx", ".cpg", ".sbn", ".sbx"):
                 sidecar = base + ext

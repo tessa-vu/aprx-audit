@@ -1,6 +1,11 @@
 """
 Add test layers to pre-existing .aprx projects.
 
+This builds a starting point for testing the auditor: it creates throwaway
+geodatabases and shapefiles, wraps each dataset in a layer file, and adds
+those layers to three projects. Nothing is broken yet at this stage, that
+is break_data_links.py's job.
+
 Empty projects must be created manually in ArcGIS Pro first, arcpy has no project
 creation function before Pro 3.7. Expected layout:
 
@@ -23,6 +28,7 @@ import arcpy
 
 
 def make_gdb(parent, name):
+    """Create a file geodatabase (a folder-based Esri database) if absent."""
     path = os.path.join(parent, name)
     if not arcpy.Exists(path):
         arcpy.management.CreateFileGDB(parent, name)
@@ -30,6 +36,10 @@ def make_gdb(parent, name):
 
 
 def make_feature_class(gdb, name, geometry="POINT"):
+    """Create an empty feature class (a table of geometries) inside a gdb.
+
+    Schema only and no rows. The auditor only cares that the source exists.
+    """
     fc = os.path.join(gdb, name)
     if not arcpy.Exists(fc):
         arcpy.management.CreateFeatureclass(gdb, name, geometry, spatial_reference=4326)
@@ -37,6 +47,8 @@ def make_feature_class(gdb, name, geometry="POINT"):
 
 
 def make_shapefile(folder, name, geometry="POLYGON"):
+    """Create an empty shapefile. Note a shapefile is really several sidecar
+    files (.shp/.dbf/.shx/.prj ...) that must travel together."""
     out = os.path.join(folder, name + ".shp")
     if not arcpy.Exists(out):
         arcpy.management.CreateFeatureclass(
@@ -46,6 +58,11 @@ def make_shapefile(folder, name, geometry="POLYGON"):
 
 
 def make_lyrx(source, lyrx_path):
+    """Save a dataset as a .lyrx layer file.
+
+    Going via a layer file is the only supported way to get a dataset into a
+    map with arcpy, addLayer takes a layer object, not a raw path.
+    """
     tmp = f"_tmp_{os.path.splitext(os.path.basename(lyrx_path))[0]}"
     arcpy.management.MakeFeatureLayer(source, tmp)
     arcpy.management.SaveToLayerFile(tmp, lyrx_path)
@@ -53,6 +70,7 @@ def make_lyrx(source, lyrx_path):
 
 
 def add_layers(aprx_path, lyrx_paths):
+    """Add the given layer files to the project's first map and save."""
     aprx = arcpy.mp.ArcGISProject(aprx_path)
     m = aprx.listMaps()[0]
     for lyrx in lyrx_paths:
@@ -90,6 +108,7 @@ def main():
         os.makedirs(d, exist_ok=True)
 
     print("Creating source data...")
+    # valid_sources.gdb stays put, breakable_sources.gdb gets moved away later.
     gdb_valid = make_gdb(data_dir, "valid_sources.gdb")
     gdb_breakable = make_gdb(data_dir, "breakable_sources.gdb")
 
@@ -116,17 +135,21 @@ def main():
     make_lyrx(shp_wetlands, lyrx_wetlands)
 
     print("Adding layers to projects...")
+    # Each project is seeded so that, once break_data_links.py runs, it lands
+    # in a predictable state: none / some / all layers broken.
     add_layers(expected["all_valid"], [lyrx_parcels, lyrx_streets, lyrx_parks])
     add_layers(expected["mixed"], [lyrx_parcels, lyrx_zoning, lyrx_wetlands])
     add_layers(expected["all_broken"], [lyrx_zoning, lyrx_flood, lyrx_wetlands])
 
+    # The layer files were only a transport mechanism, the maps now hold their
+    # own copies of the layers.
     shutil.rmtree(lyrx_dir)
 
     print(f"""
 Done. Source data created and layers added.
 
 Exit this Python session to release file locks, then break data links:
-    python _break_data_links.py {root}
+    python break_data_links.py {root}
 
 ---
 
