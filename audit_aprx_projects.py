@@ -12,9 +12,10 @@ is what this script hunts for in bulk without anyone opening Pro by hand.
 Usage:
     python audit_aprx_projects.py <root_directory> <output_csv>
 
-Only broken layers and tables are written. Web-backed feature layers show as
-"Feature Layer (Web)" etc. Joined layers report both sides. Projects that
-fail to open are logged and skipped.
+Every layer and table is written, healthy ones as "OK" and unreachable ones as
+"Broken", so the report doubles as a full inventory. Web-backed feature layers
+show as "Feature Layer (Web)" etc. Joined layers report both sides. Projects
+that fail to open are logged and skipped.
 """
 
 import csv
@@ -39,6 +40,7 @@ CSV_HEADER = [
     "Portal User",
     "Project Path",
     "Map Name",
+    "Parent Group",
     "Layer/Table Name",
     "Type",
     "Layer Type",
@@ -76,6 +78,18 @@ def describe_layer_type(lyr):
     return "Web Layer" if is_web else "Other"
 
 
+def describe_parent_group(item):
+    """Full group path containing an item, e.g. "Water\\Water body".
+
+    arcpy's longName is the whole table-of-contents path, so everything before
+    the last separator is the chain of groups the item sits in. Blank for
+    top-level items, which is also what getattr falls back to when a layer
+    type does not expose longName.
+    """
+    long_name = getattr(item, "longName", "")
+    return long_name.rsplit("\\", 1)[0] if "\\" in long_name else ""
+
+
 def extract_source_info(properties):
     """Reduce arcpy's connectionProperties dict to (workspace type, location).
 
@@ -99,6 +113,11 @@ def extract_source_info(properties):
     workspace_type = properties.get("workspace_factory", "Unknown")
     connection_info = properties.get("connection_info") or {}
     dataset = properties.get("dataset", "")
+
+    # Vector tile layers carry a bare top-level "uri" (a style root.json URL or
+    # a .vtpk path) instead of a connection_info dict.
+    if "uri" in properties:
+        return workspace_type, properties["uri"]
 
     # Web services (feature/map/WMS) have a URL instead of a path.
     if "url" in connection_info:
@@ -200,7 +219,7 @@ def write_csv_row(writer, run_context, item_fields):
 def audit_project(aprx_path, writer, run_context):
     """Inspect every map, layer and standalone table in one project.
 
-    Returns the number of broken items found, or None if the project itself
+    Returns (items reported, of which broken), or None if the project itself
     could not be opened.
 
     Failure is contained at each level: an unreadable layer does not abort its
@@ -218,6 +237,7 @@ def audit_project(aprx_path, writer, run_context):
             [
                 aprx_path,
                 "Unknown",
+                "",
                 "Unknown",
                 "Project",
                 "Unknown",
@@ -229,6 +249,7 @@ def audit_project(aprx_path, writer, run_context):
         traceback.print_exc()
         return None
 
+    total_count = 0
     broken_count = 0
     try:
         try:
@@ -241,6 +262,7 @@ def audit_project(aprx_path, writer, run_context):
                 [
                     aprx_path,
                     "Unknown",
+                    "",
                     "Unknown",
                     "Layer",
                     "Unknown",
@@ -249,7 +271,7 @@ def audit_project(aprx_path, writer, run_context):
                     "Layer Read Failed",
                 ],
             )
-            return broken_count
+            return total_count, broken_count
 
         for m in maps:
             try:
@@ -263,6 +285,7 @@ def audit_project(aprx_path, writer, run_context):
                     [
                         aprx_path,
                         getattr(m, "name", "Unknown"),
+                        "",
                         "Unknown",
                         "Layer",
                         "Unknown",
@@ -285,6 +308,7 @@ def audit_project(aprx_path, writer, run_context):
                         [
                             aprx_path,
                             map_name,
+                            describe_parent_group(lyr),
                             "Unknown",
                             "Layer",
                             "Unknown",
@@ -295,9 +319,8 @@ def audit_project(aprx_path, writer, run_context):
                     )
                     continue
 
-                # Healthy layers are intentionally not reported.
-                if not is_broken:
-                    continue
+                status = "Broken" if is_broken else "OK"
+                parent_group = describe_parent_group(lyr)
 
                 try:
                     # A group layer is just a folder in the table of contents,
@@ -309,15 +332,17 @@ def audit_project(aprx_path, writer, run_context):
                             [
                                 aprx_path,
                                 map_name,
+                                parent_group,
                                 layer_name,
                                 "Layer",
                                 "Group Layer",
                                 "",
                                 "",
-                                "Broken",
+                                status,
                             ],
                         )
-                        broken_count += 1
+                        total_count += 1
+                        broken_count += is_broken
                         continue
 
                     ws, conn = extract_source_info(read_connection_properties(lyr))
@@ -327,15 +352,17 @@ def audit_project(aprx_path, writer, run_context):
                         [
                             aprx_path,
                             map_name,
+                            parent_group,
                             layer_name,
                             "Layer",
                             describe_layer_type(lyr),
                             ws,
                             conn,
-                            "Broken",
+                            status,
                         ],
                     )
-                    broken_count += 1
+                    total_count += 1
+                    broken_count += is_broken
                 except (OSError, RuntimeError, arcpy.ExecuteError) as e:
                     print(f"    WARNING: Could not read layer ({e})")
                     write_csv_row(
@@ -344,6 +371,7 @@ def audit_project(aprx_path, writer, run_context):
                         [
                             aprx_path,
                             map_name,
+                            parent_group,
                             layer_name,
                             "Layer",
                             "Unknown",
@@ -363,6 +391,7 @@ def audit_project(aprx_path, writer, run_context):
                     [
                         aprx_path,
                         map_name,
+                        "",
                         "Unknown",
                         "Table",
                         "Standalone Table",
@@ -385,6 +414,7 @@ def audit_project(aprx_path, writer, run_context):
                         [
                             aprx_path,
                             map_name,
+                            "",
                             "Unknown",
                             "Table",
                             "Standalone Table",
@@ -395,8 +425,7 @@ def audit_project(aprx_path, writer, run_context):
                     )
                     continue
 
-                if not is_broken:
-                    continue
+                status = "Broken" if is_broken else "OK"
 
                 try:
                     ws, conn = extract_source_info(read_connection_properties(tbl))
@@ -406,15 +435,17 @@ def audit_project(aprx_path, writer, run_context):
                         [
                             aprx_path,
                             map_name,
+                            "",
                             table_name,
                             "Table",
                             "Standalone Table",
                             ws,
                             conn,
-                            "Broken",
+                            status,
                         ],
                     )
-                    broken_count += 1
+                    total_count += 1
+                    broken_count += is_broken
                 except (OSError, RuntimeError, arcpy.ExecuteError) as e:
                     print(f"    WARNING: Could not read table ({e})")
                     write_csv_row(
@@ -423,6 +454,7 @@ def audit_project(aprx_path, writer, run_context):
                         [
                             aprx_path,
                             map_name,
+                            "",
                             table_name,
                             "Table",
                             "Standalone Table",
@@ -432,7 +464,7 @@ def audit_project(aprx_path, writer, run_context):
                         ],
                     )
 
-        return broken_count
+        return total_count, broken_count
     finally:
         # Releases the project object so Pro/arcpy drops its file lock before
         # the next project is opened.
@@ -465,6 +497,7 @@ def main():
     aprx_files = glob.glob(os.path.join(root_dir, "**", "*.aprx"), recursive=True)
     print(f"Found {len(aprx_files)} project(s) in {root_dir}\n")
 
+    total_items = 0
     total_broken = 0
     failed_to_open = 0
     projects_with_read_errors = 0
@@ -480,14 +513,16 @@ def main():
 
             writer = ProjectErrorTrackingWriter(csv_writer)
             start_time = time.perf_counter()
-            broken_count = audit_project(aprx_path, writer, run_context)
+            result = audit_project(aprx_path, writer, run_context)
             elapsed_time = time.perf_counter() - start_time
             # Flush per project so an interrupted run still leaves a usable CSV.
             f.flush()
 
-            if broken_count is None:
+            if result is None:
                 failed_to_open += 1
             else:
+                item_count, broken_count = result
+                total_items += item_count
                 total_broken += broken_count
 
             if writer.had_read_error:
@@ -501,7 +536,8 @@ def main():
     failed_projects = failed_to_open + projects_with_read_errors
 
     print(
-        f"\nScanned {len(aprx_files)} project(s). Found {total_broken} broken source(s)."
+        f"\nScanned {len(aprx_files)} project(s) and {total_items} item(s). "
+        f"Found {total_broken} broken source(s)."
     )
     print(
         f"Projects with Errors: {failed_projects} "

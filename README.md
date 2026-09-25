@@ -1,6 +1,6 @@
 # aprx-audit
 
-Bulk broken-link checker for ArcGIS Pro projects. Recursively scans `.aprx` files, inventories data sources across all maps, and reports broken layer and table connections with source type and connection details. Outputs to CSV.
+Bulk data-source inventory and broken-link checker for ArcGIS Pro projects. Recursively scans `.aprx` files, inventories data sources across all maps, and reports every layer and table connection, healthy or broken, with source type and connection details. Outputs to CSV.
 
 ## Problem
 
@@ -37,7 +37,7 @@ The last two are development aids only, you don't need them to audit real projec
 
 ## 1. `audit_aprx_projects.py`
 
-The main script. Walks a folder tree, opens every `.aprx` it finds, and writes a CSV row for anything that's broken or unreadable.
+The main script. Walks a folder tree, opens every `.aprx` it finds, and writes a CSV row for every layer and standalone table, plus a row for anything that's unreadable.
 
 ### Usage
 
@@ -65,7 +65,7 @@ python audit_aprx_projects.py "\\server\gis\Projects" broken_sources.csv
 1. Captures run context once (timestamp, Pro version, portal URL, portal user).
 2. Finds every `.aprx` under the root directory.
 3. Opens each project, then for every map inspects every layer, and every standalone table.
-4. Writes a row for each item whose `isBroken` flag is set, plus a row for anything that could not be opened or read.
+4. Writes a row for each item, marked `OK` or `Broken` from its `isBroken` flag, plus a row for anything that could not be opened or read.
 5. Prints per-project progress with file size and elapsed time.
 
 Progress is printed per project as it goes, and the CSV is flushed after each
@@ -97,6 +97,7 @@ Every row has info of the run that produced it, so reports collected from multip
 | Portal User        | `jdoe_org`                                  |
 | Project Path       | `Projects/mixed_sources/mixed_sources.aprx` |
 | Map Name           | `Map`                                       |
+| Parent Group       | `Water\Water body`                          |
 | Layer/Table Name   | `zoning`                                    |
 | Type               | `Layer`                                     |
 | Layer Type         | `Feature Layer`                             |
@@ -106,12 +107,13 @@ Every row has info of the run that produced it, so reports collected from multip
 
 Context columns fall back to `Unknown` when unavailable and Portal URL and Portal User will do it on an unauthenticated machine.
 
-**Healthy layers and tables aren't written, only the three statuses below appear in the report.** An empty report (header row only) means nothing broken was found.
+**Every layer and standalone table is written, healthy ones included, so the report doubles as a full data-source inventory.** Filter on the Status column to isolate the problems. An empty report (header row only) means no projects, maps or layers were found.
 
 ### Status Values
 
 | Status                | Meaning                                                 |
 |-----------------------|---------------------------------------------------------|
+| `OK`                  | Layer or table read and its data source resolved.       |
 | `Broken`              | Layer or table read but its data source is unreachable. |
 | `Project Open Failed` | The .aprx couldn't be opened.                           |
 | `Layer Read Failed`   | A map, layer, or table threw while being inspected.     |
@@ -124,8 +126,14 @@ Derived from arcpy's boolean layer flags, first match wins:
 
 `Basemap Layer` → `Feature Layer` → `Raster Layer` → `Scene Layer` → `Service Layer` → `Web Layer` → `Other`
 
-Web-backed layers get a compound label, e.g. `Feature Layer (Web)`. Broken
-group layers report as `Group Layer` with no connection details since they have no source. Joined and related layers report both sides in the Connection String, separated by `---joined to--->`.
+Web-backed layers get a compound label, e.g. `Feature Layer (Web)`. Group
+layers report as `Group Layer` with no connection details since they have no source. Joined and related layers report both sides in the Connection String, separated by `---joined to--->`.
+
+### Parent Group
+
+Layers inside a group are listed as their own rows, so a group contributes one row for itself plus one for each child. Parent Group is the full table-of-contents path of the groups a layer sits in, backslash-separated for nesting (`Contour Lines\New Group Layer`), and blank for top-level layers and standalone tables.
+
+This matters because group and layer names are rarely unique, a project can easily contain six different `New Group Layer` groups. Rows appear in table-of-contents order, but Parent Group is what actually tells you where a layer lives.
 
 ### Workspace Type and Connection String
 
@@ -134,7 +142,10 @@ group layers report as `Group Layer` with no connection details since they have 
 | File Geodatabase / Shapefile / Folder Data | `FileGDB`, `Shapefile`, ... | `<database path>\<dataset>` |
 | Enterprise Geodatabase | `SDE` | `server = ..., instance = ..., database = ..., version = ...` |
 | Web Service (Feature / Map / WMS) | Varies | Service URL |
+| Vector Tile Layer | `Unknown` | Style `root.json` URL, or `.vtpk` path |
 | Unavailable | `Unknown` | `Unable to Retrieve` |
+
+Vector tile layers report no workspace type because arcpy gives them a bare `uri` rather than the usual workspace/dataset pair.
 
 Credentials are never written to the report.
 
@@ -196,7 +207,7 @@ python audit_aprx_projects.py Projects report.csv
 
 Exits `1` if there's nothing left to move, which usually means the script has already been run. If `data/_moved_to_break/` already contains files it warns, clear it before re-running for a clean state.
 
-### Web service layers
+### Web Service Layers
 
 These can't be scripted and must be added manually in ArcGIS Pro:
 
@@ -219,7 +230,7 @@ Worth knowing before relying on the output.
 
 - Only `.aprx` files are scanned. Map packages (`.mpkx`), standalone layer files (`.lyrx`), toolboxes, and ArcMap documents (`.mxd`) are ignored.
 - Only layers and standalone tables inside maps are checked. Layouts, charts, reports, locators, and geoprocessing history are not.
-- A broken group layer yields no connection details, since a group has no source of its own.
+- A group layer yields no connection details, since a group has no source of its own.
 
 **Accuracy of "Broken"**
 
@@ -240,7 +251,7 @@ Worth knowing before relying on the output.
 **Output**
 
 - The CSV is overwritten each run, there's no append or history mode. Use dated filenames if you want a trail.
-- Healthy items aren't recorded, so the report can't tell you how many layers were audited in total.
+- Every layer is recorded, so a share with many large projects produces a correspondingly large CSV.
 - Connection strings are best-effort. Unusual or plug-in workspace types may fall back to `Unknown` / `Unable to Retrieve`.
 - Nothing is repaired. This is a read-only report, fixing sources is a separate exercise.
 
